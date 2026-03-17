@@ -12,6 +12,7 @@ resources:
   - ../../base/maas-api/overlays/tls  # maas-api with TLS (includes DestinationRule + NetworkPolicy)
   - ../../base/maas-controller/default
   - ../../base/maas-controller/policies  # gateway-default-auth, gateway-default-deny
+  - ../../base/observability
 
 configMapGenerator:
 - envs:
@@ -141,3 +142,25 @@ replacements:
     options:
       delimiter: "."
       index: 1
+- source:
+    kind: ConfigMap
+    version: v1
+    name: maas-parameters
+    fieldPath: data.gateway-namespace
+  targets:
+  - select:
+      kind: EnvoyFilter
+      name: maas-gateway-envoy-filter
+    fieldPaths:
+    - metadata.namespace
+- source:
+    kind: ConfigMap
+    version: v1
+    name: maas-parameters
+    fieldPath: data.gateway-name
+  targets:
+  - select:
+      kind: EnvoyFilter
+      name: maas-gateway-envoy-filter
+    fieldPaths:
+    - spec.workloadSelector.labels.[gateway.networking.k8s.io/gateway-name]
