@@ -1,0 +1,22 @@
+- op: add
+  path: /spec/config/extensions/bearertokenauth
+  value:
+    filename: /var/run/secrets/kubernetes.io/serviceaccount/token
+
+- op: add
+  path: /spec/config/exporters/otlphttp~1loki
+  value:
+    auth:
+      authenticator: bearertokenauth
+    endpoint: ''
+    tls:
+      ca_file: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
+      insecure_skip_verify: true
+
+- op: add
+  path: /spec/config/service/extensions/-
+  value: bearertokenauth
+
+- op: add
+  path: /spec/config/service/pipelines/logs/exporters/-
+  value: otlphttp/loki

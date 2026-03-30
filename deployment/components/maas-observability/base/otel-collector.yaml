@@ -1,0 +1,32 @@
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: user-usage
+  namespace: opendatahub
+spec:
+  config:
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: '0.0.0.0:4317'
+    processors:
+      batch: {}
+      resource:
+        attributes:
+          - action: insert
+            key: log_type
+            value: application
+          - action: upsert
+            key: kubernetes_namespace_name
+            value: opendatahub
+    # Placeholders for patches to hook into
+    exporters: {}
+    extensions: {}
+    service:
+      extensions: []
+      pipelines:
+        logs:
+          receivers: [otlp]
+          processors: [resource, batch]
+          exporters: []

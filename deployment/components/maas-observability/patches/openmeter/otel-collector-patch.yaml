@@ -1,0 +1,10 @@
+- op: add
+  path: /spec/config/exporters/otlp_grpc~1openmeter
+  value:
+    endpoint: ''
+    tls:
+      insecure: true
+
+- op: add
+  path: /spec/config/service/pipelines/logs/exporters/-
+  value: otlp_grpc/openmeter

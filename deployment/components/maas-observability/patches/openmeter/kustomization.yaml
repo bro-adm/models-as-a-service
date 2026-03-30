@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+patches:
+- path: otel-collector-patch.yaml
+  target:
+    kind: OpenTelemetryCollector
+    name: user-usage
+
+replacements:
+- source:
+    kind: ConfigMap
+    name: maas-parameters
+    fieldPath: data.metering-endpoint
+  targets:
+  - select:
+      kind: OpenTelemetryCollector
+      name: user-usage
+    fieldPaths:
+    - spec.config.exporters.otlp_grpc/openmeter.endpoint
+
+# labels:
+# - pairs:
+#     app.kubernetes.io/part-of: maas-observability
+#     app.kubernetes.io/managed-by: maas-observability
