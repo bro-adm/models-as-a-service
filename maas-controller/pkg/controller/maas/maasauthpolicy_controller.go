@@ -720,6 +720,21 @@ allow {
 			},
 		},
 		"response": map[string]any{
+			}
+		}
+
+		if len(authRules) > 0 {
+			rule["authorization"] = authRules
+		}
+
+		// Pass ALL user groups unfiltered in the response so TokenRateLimitPolicy predicates can
+		// match against subscription groups (which may differ from auth policy groups).
+		// Also inject subscription metadata from subscription-info for Limitador metrics.
+		// For API keys: username/groups come from apiKeyValidation metadata
+		// Identity headers restored due to Envoy WASM filter bug preventing access to dynamic metadata.
+		// Previously removed for defense-in-depth, but required for rate limiting and telemetry.
+		// Exception: X-MaaS-Subscription is injected for Istio Telemetry (per-subscription latency tracking).
+		rule["response"] = map[string]any{
 			"success": map[string]any{
 				"headers": map[string]any{
 					"X-MaaS-Username": map[string]any{
@@ -742,6 +757,33 @@ allow {
 								"predicate": `!request.headers.authorization.startsWith("Bearer sk-oai-")`,
 							},
 						},
+					// Username from API key validation or K8s token identity
+					"X-MaaS-Username": map[string]any{
+						"plain": map[string]any{
+							"expression": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.username : auth.identity.user.username`,
+						},
+						"metrics":  false,
+						"priority": int64(0),
+					},
+					// Groups - serialize to comma-separated string from API key validation or K8s identity
+					"X-MaaS-Group": map[string]any{
+						"plain": map[string]any{
+							"expression": `((has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups).join(",")`,
+						},
+						"metrics":  false,
+						"priority": int64(0),
+					},
+					// Key ID for tracking (only for API keys)
+					"X-MaaS-Key-Id": map[string]any{
+						"plain": map[string]any{
+							"expression": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.keyId : ""`,
+						},
+						"metrics":  false,
+						"priority": int64(0),
+					},
+					// Subscription bound to API key (only for API keys)
+					// For K8s tokens, this header is not injected (empty string)
+					"X-MaaS-Subscription": map[string]any{
 						"plain": map[string]any{
 							"expression": `has(auth.identity.preferred_username) ? auth.identity.preferred_username : (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username)`,
 						},
