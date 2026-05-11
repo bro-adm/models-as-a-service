@@ -47,9 +47,29 @@ spec:
           metadata:
             type: object
           spec:
-            description: |-
-              ConfigSpec defines the desired state of Config.
-              Reserved for future cluster-wide configuration; v1alpha1 uses an empty spec.
+            description: ConfigSpec defines cluster-wide configuration for the MaaS
+              platform.
+            properties:
+              telemetry:
+                description: Telemetry configures cluster-wide observability and telemetry
+                  settings.
+                properties:
+                  usage:
+                    description: Usage configures usage tracking and OpenTelemetry
+                      logging.
+                    properties:
+                      otelEndpoint:
+                        description: |-
+                          OTELEndpoint is the OpenTelemetry collector endpoint for usage logs.
+                          Format: "host:port" (e.g., "data-science-logs-collector.opendatahub.svc.cluster.local:4317")
+                          When set, creates a cluster-wide EnvoyFilter that sends /v1/completions logs to this endpoint.
+                          When removed, the EnvoyFilter is automatically deleted via Kubernetes garbage collection.
+                        pattern: ^[a-zA-Z0-9]([a-zA-Z0-9\-\.]*[a-zA-Z0-9])?:[0-9]+$
+                        type: string
+                    required:
+                    - otelEndpoint
+                    type: object
+                type: object
             type: object
           status:
             description: ConfigStatus defines the observed state of Config.

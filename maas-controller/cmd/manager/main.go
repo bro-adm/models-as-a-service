@@ -713,6 +713,17 @@ func main() {
 	}
 
 	if err := mgr.Add(ensureClusterBootstrapRunnable(mgr, maasSubscriptionNamespace, controllerNamespace, "maas-controller", gatewayName, gatewayNamespace)); err != nil {
+	// ConfigReconciler manages cluster-wide resources (EnvoyFilter for usage tracking)
+	if err := (&maas.ConfigReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Config")
+		os.Exit(1)
+	}
+	setupLog.Info("ConfigReconciler registered")
+
+	if err := mgr.Add(ensureClusterBootstrapRunnable(mgr, maasSubscriptionNamespace, maasAPINamespace, "maas-controller", gatewayName, gatewayNamespace)); err != nil {
 		setupLog.Error(err, "unable to register ensureClusterBootstrap runnable")
 		os.Exit(1)
 	}

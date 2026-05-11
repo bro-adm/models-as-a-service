@@ -1,0 +1,206 @@
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: {{.Name}}
+  namespace: {{.Namespace}}
+  labels:
+    app.kubernetes.io/part-of: maas-observability
+    app.kubernetes.io/managed-by: maas-controller
+    maas.opendatahub.io/config-usage: "true"
+spec:
+  workloadSelector:
+    labels:
+      maas-gateway: "true"
+  configPatches:
+  - applyTo: CLUSTER
+    patch:
+      operation: ADD
+      value:
+        name: otel_als_cluster
+        type: STRICT_DNS
+        connect_timeout: 5s
+        http2_protocol_options: {}
+        load_assignment:
+          cluster_name: otel_als_cluster
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address:
+                    address: {{.OTELHost}}
+                    port_value: {{.OTELPort}}
+
+  # Use Lua filter for path-based header extraction and JSON parsing
+  - applyTo: HTTP_FILTER
+    match:
+      context: GATEWAY
+      listener:
+        filterChain:
+          filter:
+            name: envoy.filters.network.http_connection_manager
+            subFilter:
+              name: envoy.filters.http.router
+    patch:
+      operation: INSERT_BEFORE
+      value:
+        name: envoy.filters.http.lua
+        typed_config:
+          '@type': type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+          default_source_code:
+            inline_string: |
+              function envoy_on_request(request_handle)
+                local path = request_handle:headers():get(":path")
+                -- Match rewritten path (after HTTPRoute rewrite)
+                if path and string.match(path, "/v1/completions$") then
+
+                  -- FIX: Set a flag in dynamic metadata so the response filter knows to run
+                  request_handle:streamInfo():dynamicMetadata():set("envoy.filters.http.custom_maas", "is_completions", "true")
+
+                  -- Extract and store headers as metadata, then remove them
+                  local username = request_handle:headers():get("X-MaaS-Username")
+                  local group = request_handle:headers():get("X-MaaS-Group")
+                  local key_id = request_handle:headers():get("X-MaaS-Key-Id")
+
+                  if username then
+                    request_handle:streamInfo():dynamicMetadata():set("envoy.filters.http.custom_maas", "user_id", username)
+                    request_handle:headers():remove("X-MaaS-Username")
+                  end
+                  if group then
+                    request_handle:streamInfo():dynamicMetadata():set("envoy.filters.http.custom_maas", "groups", group)
+                    request_handle:headers():remove("X-MaaS-Group")
+                  end
+                  if key_id then
+                    request_handle:streamInfo():dynamicMetadata():set("envoy.filters.http.custom_maas", "key_id", key_id)
+                    request_handle:headers():remove("X-MaaS-Key-Id")
+                  end
+                end
+              end
+
+              function envoy_on_response(response_handle)
+                -- FIX: Check the metadata flag instead of reading request pseudo-headers
+                local meta = response_handle:streamInfo():dynamicMetadata():get("envoy.filters.http.custom_maas")
+                if meta and meta["is_completions"] == "true" then
+
+                  -- Parse JSON response body for token counts
+                  local body = response_handle:body()
+                  if body then
+                    local body_str = body:getBytes(0, body:length())
+                    -- Simple JSON parsing for usage fields and model
+                    local total_tokens = string.match(body_str, '"total_tokens"%s*:%s*(%d+)')
+                    local prompt_tokens = string.match(body_str, '"prompt_tokens"%s*:%s*(%d+)')
+                    local completion_tokens = string.match(body_str, '"completion_tokens"%s*:%s*(%d+)')
+                    local model = string.match(body_str, '"model"%s*:%s*"([^"]+)"')
+
+                    response_handle:streamInfo():dynamicMetadata():set("envoy.filters.http.json_to_metadata", "tokens_total", total_tokens or "0")
+                    response_handle:streamInfo():dynamicMetadata():set("envoy.filters.http.json_to_metadata", "tokens_prompt", prompt_tokens or "0")
+                    response_handle:streamInfo():dynamicMetadata():set("envoy.filters.http.json_to_metadata", "tokens_completion", completion_tokens or "0")
+                    response_handle:streamInfo():dynamicMetadata():set("envoy.filters.http.json_to_metadata", "model", model or "")
+                  end
+                end
+              end
+
+  # OpenTelemetry Access Logger filtered to /v1/completions
+  - applyTo: NETWORK_FILTER
+    match:
+      context: GATEWAY
+      listener:
+        filterChain:
+          filter:
+            name: envoy.filters.network.http_connection_manager
+    patch:
+      operation: MERGE
+      value:
+        typed_config:
+          '@type': type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          access_log:
+          - name: envoy.access_loggers.open_telemetry
+            filter:
+              header_filter:
+                header:
+                  name: :path
+                  safe_regex_match:
+                    google_re2: {}
+                    regex: "/v1/completions$"
+            typed_config:
+              '@type': type.googleapis.com/envoy.extensions.access_loggers.open_telemetry.v3.OpenTelemetryAccessLogConfig
+              common_config:
+                log_name: maas-usage-log
+                transport_api_version: V3
+                grpc_service:
+                  envoy_grpc:
+                    cluster_name: otel_als_cluster
+              body:
+                string_value: '%REQ(:METHOD)% %REQ(:PATH)% %RESPONSE_CODE%'
+              attributes:
+                values:
+                - key: request_id
+                  value:
+                    string_value: '%REQ(X-REQUEST-ID)%'
+                - key: method
+                  value:
+                    string_value: '%REQ(:METHOD)%'
+                - key: path
+                  value:
+                    string_value: '%REQ(:PATH)%'
+                - key: authority
+                  value:
+                    string_value: '%REQ(:AUTHORITY)%'
+                - key: response_code
+                  value:
+                    string_value: '%RESPONSE_CODE%'
+                - key: response_type
+                  value:
+                    string_value: '%CEL(response.code >= 200 && response.code < 300 ? "hit" : (response.code == 429 ? "rate_limit" : "error"))%'
+                - key: upstream_cluster
+                  value:
+                    string_value: '%UPSTREAM_CLUSTER%'
+                - key: duration_ms
+                  value:
+                    string_value: '%DURATION%'
+                - key: bytes_received
+                  value:
+                    string_value: '%BYTES_RECEIVED%'
+                - key: bytes_sent
+                  value:
+                    string_value: '%BYTES_SENT%'
+                - key: response_code_details
+                  value:
+                    string_value: '%RESPONSE_CODE_DETAILS%'
+                - key: downstream_remote_address
+                  value:
+                    string_value: '%DOWNSTREAM_REMOTE_ADDRESS%'
+                - key: route_name
+                  value:
+                    string_value: '%ROUTE_NAME%'
+                - key: user_id
+                  value:
+                    string_value: '%DYNAMIC_METADATA(envoy.filters.http.custom_maas:user_id)%'
+                - key: subscription
+                  value:
+                    string_value: '%REQ(X-MaaS-Subscription)%'
+                - key: groups
+                  value:
+                    string_value: '%DYNAMIC_METADATA(envoy.filters.http.custom_maas:groups)%'
+                - key: key_id
+                  value:
+                    string_value: '%DYNAMIC_METADATA(envoy.filters.http.custom_maas:key_id)%'
+                - key: tokens_total
+                  value:
+                    string_value: '%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:tokens_total)%'
+                - key: tokens_prompt
+                  value:
+                    string_value: '%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:tokens_prompt)%'
+                - key: tokens_completion
+                  value:
+                    string_value: '%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:tokens_completion)%'
+                - key: model
+                  value:
+                    string_value: '%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:model)%'
+              resource_attributes:
+                values:
+                - key: service.name
+                  value:
+                    string_value: maas-gateway
+                - key: service.namespace
+                  value:
+                    string_value: {{.Namespace}}
