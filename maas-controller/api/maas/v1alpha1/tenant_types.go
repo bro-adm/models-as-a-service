@@ -96,6 +96,9 @@ type TenantTelemetryConfig struct {
 
 	// +kubebuilder:validation:Optional
 	Metrics *TenantMetricsConfig `json:"metrics,omitempty"`
+
+	// +kubebuilder:validation:Optional
+	Logs *TenantLogsConfig `json:"logs,omitempty"`
 }
 
 // TenantMetricsConfig defines optional metric dimensions.
@@ -118,6 +121,17 @@ type TenantMetricsConfig struct {
 	// +kubebuilder:default=true
 	// +kubebuilder:validation:Optional
 	CaptureModelUsage *bool `json:"captureModelUsage,omitempty"`
+}
+
+// TenantLogsConfig defines configuration for access logging via OpenTelemetry.
+type TenantLogsConfig struct {
+	// OTELEndpoint is the OpenTelemetry collector endpoint for logs
+	// (e.g., user-usage-collector.opendatahub.svc.cluster.local:4317)
+	// This will be used to create an Envoy cluster for OTLP log export.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9]([a-zA-Z0-9\-\.]*[a-zA-Z0-9])?(:[0-9]+)?$`
+	OTELEndpoint string `json:"otelEndpoint"`
 }
 
 // TenantAPIKeysConfig defines configuration options for API key management.

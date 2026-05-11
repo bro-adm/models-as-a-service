@@ -79,6 +79,17 @@ const (
 	baseMaaSAPIKeyCleanupScriptConfigMapName       = "maas-api-key-cleanup-script" //nolint:gosec // Kubernetes resource name, not a credential
 
 	// Non-tenant-specific resource names (shared infrastructure)
+	GatewayDefaultAuthPolicyName                  = "gateway-default-auth"
+	GatewayTokenRateLimitDefaultDenyPolicyName    = "gateway-default-deny"
+	MaaSAPIAuthPolicyName                         = "maas-api-auth-policy"
+	MaaSAPIRouteName                              = "maas-api-route"
+	MaaSAPIKeyCleanupCronJobName                  = "maas-api-key-cleanup" //nolint:gosec // Kubernetes resource name, not a credential
+	GatewayDestinationRuleName                    = "maas-api-backend-tls"
+	TelemetryPolicyName                           = "maas-telemetry"
+	IstioTelemetryName                            = "latency-per-subscription"
+	EnvoyFilterLogsName                           = "maas-tenant-observability-envoy-filter"
+	MaaSAPIDeploymentName                         = "maas-api"
+	MaaSParametersConfigMapName                   = "maas-parameters"
 	PayloadProcessingName                         = "payload-processing"
 	PayloadPreProcessingName                      = "payload-pre-processing"
 	PayloadProcessingPluginsConfigMapName         = "payload-processing-plugins"

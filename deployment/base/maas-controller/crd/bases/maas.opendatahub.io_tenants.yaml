@@ -111,6 +111,21 @@ spec:
                   enabled:
                     default: true
                     type: boolean
+                  logs:
+                    description: TenantLogsConfig defines configuration for access
+                      logging via OpenTelemetry.
+                    properties:
+                      otelEndpoint:
+                        description: |-
+                          OTELEndpoint is the OpenTelemetry collector endpoint for logs
+                          (e.g., user-usage-collector.opendatahub.svc.cluster.local:4317)
+                          This will be used to create an Envoy cluster for OTLP log export.
+                        minLength: 1
+                        pattern: ^[a-zA-Z0-9]([a-zA-Z0-9\-\.]*[a-zA-Z0-9])?(:[0-9]+)?$
+                        type: string
+                    required:
+                    - otelEndpoint
+                    type: object
                   metrics:
                     description: TenantMetricsConfig defines optional metric dimensions.
                     properties:
