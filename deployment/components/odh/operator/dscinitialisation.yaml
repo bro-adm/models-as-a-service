@@ -11,6 +11,8 @@ spec:
   monitoring:
     managementState: Managed
     namespace: opendatahub
+    logs:
+      endpoint: "https://lokistack-sample-gateway-http.logging.svc.cluster.local:8080/api/logs/v1/application/otlp" 
   
   # Trusted CA bundle for TLS certificates
   trustedCABundle:
