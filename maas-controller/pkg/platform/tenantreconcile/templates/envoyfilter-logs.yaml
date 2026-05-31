@@ -30,7 +30,7 @@ spec:
                     address: {{.OTELHost}}
                     port_value: {{.OTELPort}}
   
-  # Step 1: Capture request headers only when they are present
+  # Use Lua filter for path-based header extraction and JSON parsing
   - applyTo: HTTP_FILTER
     match:
       context: GATEWAY
@@ -43,107 +43,63 @@ spec:
     patch:
       operation: INSERT_BEFORE
       value:
-        name: envoy.filters.http.header_to_metadata
+        name: envoy.filters.http.lua
         typed_config:
-          '@type': type.googleapis.com/envoy.extensions.filters.http.header_to_metadata.v3.Config
-          request_rules:
-          - header: X-MaaS-Username
-            on_header_present:
-              metadata_namespace: envoy.filters.http.custom_maas
-              key: user_id
-              type: STRING
-            remove: true
-          - header: X-MaaS-Group
-            on_header_present:
-              metadata_namespace: envoy.filters.http.custom_maas
-              key: groups
-              type: STRING
-            remove: true
-          - header: X-MaaS-Key-Id
-            on_header_present:
-              metadata_namespace: envoy.filters.http.custom_maas
-              key: key_id
-              type: STRING
-            remove: true
+          '@type': type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+          default_source_code:
+            inline_string: |
+              function envoy_on_request(request_handle)
+                local path = request_handle:headers():get(":path")
+                -- Match rewritten path (after HTTPRoute rewrite)
+                if path and string.match(path, "/v1/completions$") then
+                  
+                  -- FIX: Set a flag in dynamic metadata so the response filter knows to run
+                  request_handle:streamInfo():dynamicMetadata():set("envoy.filters.http.custom_maas", "is_completions", "true")
 
-  # Step 2: Parse token usage metrics from the response body
-  - applyTo: HTTP_FILTER
-    match:
-      context: GATEWAY
-      listener:
-        filterChain:
-          filter:
-            name: envoy.filters.network.http_connection_manager
-            subFilter:
-              name: envoy.filters.http.router
-    patch:
-      operation: INSERT_BEFORE
-      value:
-        name: envoy.filters.http.json_to_metadata
-        typed_config:
-          '@type': type.googleapis.com/envoy.extensions.filters.http.json_to_metadata.v3.JsonToMetadata
-          response_rules:
-            rules:
-            - selectors:
-              - key: usage
-              - key: total_tokens
-              on_present:
-                key: tokens_total
-                metadata_namespace: envoy.filters.http.json_to_metadata
-                type: NUMBER
-              on_missing:
-                key: tokens_total
-                metadata_namespace: envoy.filters.http.json_to_metadata
-                value: "0"
-              on_error:
-                key: tokens_total
-                metadata_namespace: envoy.filters.http.json_to_metadata
-                value: "0"
-            - selectors:
-              - key: usage
-              - key: prompt_tokens
-              on_present:
-                key: tokens_prompt
-                metadata_namespace: envoy.filters.http.json_to_metadata
-                type: NUMBER
-              on_missing:
-                key: tokens_prompt
-                metadata_namespace: envoy.filters.http.json_to_metadata
-                value: "0"
-              on_error:
-                key: tokens_prompt
-                metadata_namespace: envoy.filters.http.json_to_metadata
-                value: "0"
-            - selectors:
-              - key: usage
-              - key: completion_tokens
-              on_present:
-                key: tokens_completion
-                metadata_namespace: envoy.filters.http.json_to_metadata
-                type: NUMBER
-              on_missing:
-                key: tokens_completion
-                metadata_namespace: envoy.filters.http.json_to_metadata
-                value: "0"
-              on_error:
-                key: tokens_completion
-                metadata_namespace: envoy.filters.http.json_to_metadata
-                value: "0"
-            - selectors:
-              - key: model
-              on_present:
-                key: model
-                metadata_namespace: envoy.filters.http.json_to_metadata
-              on_missing:
-                key: model
-                metadata_namespace: envoy.filters.http.json_to_metadata
-                value: ""
-              on_error:
-                key: model
-                metadata_namespace: envoy.filters.http.json_to_metadata
-                value: ""
-
-  # Step 3: Stream telemetries using OpenTelemetry Access Logger
+                  -- Extract and store headers as metadata, then remove them
+                  local username = request_handle:headers():get("X-MaaS-Username")
+                  local group = request_handle:headers():get("X-MaaS-Group")
+                  local key_id = request_handle:headers():get("X-MaaS-Key-Id")
+                  
+                  if username then
+                    request_handle:streamInfo():dynamicMetadata():set("envoy.filters.http.custom_maas", "user_id", username)
+                    request_handle:headers():remove("X-MaaS-Username")
+                  end
+                  if group then
+                    request_handle:streamInfo():dynamicMetadata():set("envoy.filters.http.custom_maas", "groups", group)
+                    request_handle:headers():remove("X-MaaS-Group")
+                  end
+                  if key_id then
+                    request_handle:streamInfo():dynamicMetadata():set("envoy.filters.http.custom_maas", "key_id", key_id)
+                    request_handle:headers():remove("X-MaaS-Key-Id")
+                  end
+                end
+              end
+              
+              function envoy_on_response(response_handle)
+                -- FIX: Check the metadata flag instead of reading request pseudo-headers
+                local meta = response_handle:streamInfo():dynamicMetadata():get("envoy.filters.http.custom_maas")
+                if meta and meta["is_completions"] == "true" then
+                  
+                  -- Parse JSON response body for token counts
+                  local body = response_handle:body()
+                  if body then
+                    local body_str = body:getBytes(0, body:length())
+                    -- Simple JSON parsing for usage fields and model
+                    local total_tokens = string.match(body_str, '"total_tokens"%s*:%s*(%d+)')
+                    local prompt_tokens = string.match(body_str, '"prompt_tokens"%s*:%s*(%d+)')
+                    local completion_tokens = string.match(body_str, '"completion_tokens"%s*:%s*(%d+)')
+                    local model = string.match(body_str, '"model"%s*:%s*"([^"]+)"')
+                    
+                    response_handle:streamInfo():dynamicMetadata():set("envoy.filters.http.json_to_metadata", "tokens_total", total_tokens or "0")
+                    response_handle:streamInfo():dynamicMetadata():set("envoy.filters.http.json_to_metadata", "tokens_prompt", prompt_tokens or "0")
+                    response_handle:streamInfo():dynamicMetadata():set("envoy.filters.http.json_to_metadata", "tokens_completion", completion_tokens or "0")
+                    response_handle:streamInfo():dynamicMetadata():set("envoy.filters.http.json_to_metadata", "model", model or "")
+                  end
+                end
+              end
+  
+  # OpenTelemetry Access Logger filtered to /v1/completions
   - applyTo: NETWORK_FILTER
     match:
       context: GATEWAY
@@ -158,6 +114,13 @@ spec:
           '@type': type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
           access_log:
           - name: envoy.access_loggers.open_telemetry
+            filter:
+              header_filter:
+                header:
+                  name: :path
+                  safe_regex_match:
+                    google_re2: {}
+                    regex: "/v1/completions$"
             typed_config:
               '@type': type.googleapis.com/envoy.extensions.access_loggers.open_telemetry.v3.OpenTelemetryAccessLogConfig
               common_config:
