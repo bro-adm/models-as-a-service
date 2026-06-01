@@ -1,0 +1,23 @@
+[tools]
+"nix:go" = "1.25.0"
+"nix:operator-sdk" = "1.42.0"
+"nix:jq" = "latest"
+"nix:gnused" = "latest"
+"nix:kustomize" = "latest"
+# "ubi:operator-framework/operator-sdk" = "1.37.0"
+
+# [shell_alias]
+# gsed = "sed"
+
+[env]
+QUAY_SERVER = "quay.io/rh-ee-lbondy"
+IMAGE_TAG_BASE = "quay.io/rh-ee-lbondy/opendatahub-operator"
+OPERATOR_NAMESPACE = "opendatahub-operator-system"
+REPO = "quay.io/rh-ee-lbondy/maas-controller"
+TAG = "latest"
+_.path = "{{config_root}}/bin"
+
+[hooks.enter]
+script = """
+ln -sf "$(which sed)" "{{config_root}}/bin/gsed"
+"""
