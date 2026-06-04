@@ -45,9 +45,30 @@ type Config struct {
 	Status ConfigStatus `json:"status,omitempty"`
 }
 
-// ConfigSpec defines the desired state of Config.
-// Reserved for future cluster-wide configuration; v1alpha1 uses an empty spec.
-type ConfigSpec struct{}
+// ConfigSpec defines cluster-wide configuration for the MaaS platform.
+type ConfigSpec struct {
+	// Telemetry configures cluster-wide observability and telemetry settings.
+	// +kubebuilder:validation:Optional
+	Telemetry *ConfigTelemetrySpec `json:"telemetry,omitempty"`
+}
+
+// ConfigTelemetrySpec configures cluster-wide telemetry and observability.
+type ConfigTelemetrySpec struct {
+	// Usage configures usage tracking and OpenTelemetry logging.
+	// +kubebuilder:validation:Optional
+	Usage *ConfigUsageSpec `json:"usage,omitempty"`
+}
+
+// ConfigUsageSpec configures cluster-wide usage tracking.
+type ConfigUsageSpec struct {
+	// OTELEndpoint is the OpenTelemetry collector endpoint for usage logs.
+	// Format: "host:port" (e.g., "data-science-logs-collector.opendatahub.svc.cluster.local:4317")
+	// When set, creates a cluster-wide EnvoyFilter that sends /v1/completions logs to this endpoint.
+	// When removed, the EnvoyFilter is automatically deleted via Kubernetes garbage collection.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9]([a-zA-Z0-9\-\.]*[a-zA-Z0-9])?:[0-9]+$`
+	OTELEndpoint string `json:"otelEndpoint"`
+}
 
 // ConfigStatus defines the observed state of Config.
 type ConfigStatus struct{}

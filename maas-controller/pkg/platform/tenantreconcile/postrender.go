@@ -1,30 +1,21 @@
 package tenantreconcile
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
-	"text/template"
 
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/util/yaml"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
-
-	_ "embed"
 )
-
-//go:embed templates/envoyfilter-logs.yaml
-var envoyFilterLogsTemplate string
 
 // PostRender mutates rendered resources after kustomize build. It patches all
 // dynamic values (images, gateway config, namespace, audience, env vars) and
@@ -65,9 +56,6 @@ func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenan
 		return nil, err
 	}
 	if err := configureIstioTelemetryResources(log, tenant, &filteredResources, tenantID); err != nil {
-		return nil, err
-	}
-	if err := configureEnvoyFilterLogsResources(log, tenant, &filteredResources); err != nil {
 		return nil, err
 	}
 	if err := applyPlatformParams(log, filteredResources, params); err != nil {
@@ -310,79 +298,6 @@ func buildTelemetryLabels(log logr.Logger, config *maasv1alpha1.TenantTelemetryC
 		labels["model"] = "responseBodyJSON(\"/model\")"
 	}
 	return labels
-}
-
-func isLogsEnabled(t *maasv1alpha1.TenantTelemetryConfig) bool {
-	if t == nil || t.Logs == nil {
-		return false
-	}
-	if t.Enabled == nil {
-		return false
-	}
-	return *t.Enabled
-}
-
-type envoyFilterLogsTemplateData struct {
-	Name            string
-	Namespace       string
-	TenantName      string
-	TenantNamespace string
-	GatewayName     string
-	OTELHost        string
-	OTELPort        int64
-}
-
-func configureEnvoyFilterLogsResources(log logr.Logger, tenant *maasv1alpha1.Tenant, resources *[]unstructured.Unstructured) error {
-	if !isLogsEnabled(tenant.Spec.Telemetry) {
-		return nil
-	}
-
-	gatewayNamespace := tenant.Spec.GatewayRef.Namespace
-	gatewayName := tenant.Spec.GatewayRef.Name
-	otelEndpoint := tenant.Spec.Telemetry.Logs.OTELEndpoint
-
-	// Parse endpoint into host:port
-	// Format: "user-usage-collector.opendatahub.svc.cluster.local:4317"
-	parts := strings.Split(otelEndpoint, ":")
-	if len(parts) != 2 {
-		return fmt.Errorf("invalid otelEndpoint format %q: expected host:port", otelEndpoint)
-	}
-	host := parts[0]
-	port, err := strconv.ParseInt(parts[1], 10, 64)
-	if err != nil {
-		return fmt.Errorf("invalid port in otelEndpoint %q: %w", otelEndpoint, err)
-	}
-
-	// Render template with data
-	tmplData := envoyFilterLogsTemplateData{
-		Name:            EnvoyFilterLogsName,
-		Namespace:       gatewayNamespace,
-		TenantName:      tenant.Name,
-		TenantNamespace: tenant.Namespace,
-		GatewayName:     gatewayName,
-		OTELHost:        host,
-		OTELPort:        port,
-	}
-
-	tmpl, err := template.New("envoyfilter-logs").Parse(envoyFilterLogsTemplate)
-	if err != nil {
-		return fmt.Errorf("failed to parse EnvoyFilter template: %w", err)
-	}
-
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, tmplData); err != nil {
-		return fmt.Errorf("failed to execute EnvoyFilter template: %w", err)
-	}
-
-	// Parse YAML into unstructured object
-	ef := &unstructured.Unstructured{}
-	if err := yaml.Unmarshal(buf.Bytes(), &ef.Object); err != nil {
-		return fmt.Errorf("failed to unmarshal rendered EnvoyFilter YAML: %w", err)
-	}
-
-	log.V(2).Info("Appending EnvoyFilter for logs", "name", EnvoyFilterLogsName, "namespace", gatewayNamespace)
-	*resources = append(*resources, *ef)
-	return nil
 }
 
 func configureConfigHashAnnotation(log logr.Logger, resources []unstructured.Unstructured) error {

@@ -243,17 +243,6 @@ rules:
   - networking.istio.io
   resources:
   - destinationrules
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - networking.istio.io
-  resources:
   - envoyfilters
   verbs:
   - create
@@ -261,6 +250,7 @@ rules:
   - get
   - list
   - patch
+  - update
   - watch
 - apiGroups:
   - networking.istio.io

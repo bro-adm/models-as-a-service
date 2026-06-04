@@ -87,7 +87,6 @@ const (
 	GatewayDestinationRuleName                    = "maas-api-backend-tls"
 	TelemetryPolicyName                           = "maas-telemetry"
 	IstioTelemetryName                            = "latency-per-subscription"
-	EnvoyFilterLogsName                           = "maas-tenant-observability-envoy-filter"
 	MaaSAPIDeploymentName                         = "maas-api"
 	MaaSParametersConfigMapName                   = "maas-parameters"
 	PayloadProcessingName                         = "payload-processing"
