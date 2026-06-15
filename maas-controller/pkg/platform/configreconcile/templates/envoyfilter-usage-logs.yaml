@@ -30,7 +30,39 @@ spec:
                     address: {{.OTELHost}}
                     port_value: {{.OTELPort}}
 
-  # Use Lua filter for path-based header extraction and JSON parsing
+  # ACTION 1: Runs FIRST. Solely catches the incoming request body 'model' field
+  - applyTo: HTTP_FILTER
+    match:
+      context: GATEWAY
+      listener:
+        filterChain:
+          filter:
+            name: envoy.filters.network.http_connection_manager
+    patch:
+      operation: INSERT_FIRST
+      value:
+        name: envoy.filters.http.lua.capture_model
+        typed_config:
+          '@type': type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+          default_source_code:
+            inline_string: |
+              function envoy_on_request(request_handle)
+                local path = request_handle:headers():get(":path")
+                if path and string.match(path, "/v1/chat/completions") then
+                  local req_body = request_handle:body()
+                  if req_body then
+                    local req_body_str = req_body:getBytes(0, req_body:length())
+                    local model = string.match(req_body_str, '"model"%s*:%s*"([^"]+)"')
+                    if model then
+                      request_handle:streamInfo():dynamicMetadata():set("envoy.filters.http.json_to_metadata", "model", model)
+                    else
+                      request_handle:streamInfo():dynamicMetadata():set("envoy.filters.http.json_to_metadata", "model", "unknown")
+                    end
+                  end
+                end
+              end
+
+  # ACTION 2: Runs BEFORE the router. Strips identity tracking headers and parses LLM token counts
   - applyTo: HTTP_FILTER
     match:
       context: GATEWAY
@@ -43,63 +75,42 @@ spec:
     patch:
       operation: INSERT_BEFORE
       value:
-        name: envoy.filters.http.lua
+        name: envoy.filters.http.lua.process_and_clean
         typed_config:
           '@type': type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
           default_source_code:
             inline_string: |
               function envoy_on_request(request_handle)
                 local path = request_handle:headers():get(":path")
-                -- Match rewritten path (after HTTPRoute rewrite)
-                if path and string.match(path, "/v1/completions$") then
-
-                  -- FIX: Set a flag in dynamic metadata so the response filter knows to run
+                if path and string.match(path, "/v1/chat/completions") then
+                  -- Set an internal marker so envoy_on_response knows to capture tokens later
                   request_handle:streamInfo():dynamicMetadata():set("envoy.filters.http.custom_maas", "is_completions", "true")
 
-                  -- Extract and store headers as metadata, then remove them
-                  local username = request_handle:headers():get("X-MaaS-Username")
-                  local group = request_handle:headers():get("X-MaaS-Group")
-                  local key_id = request_handle:headers():get("X-MaaS-Key-Id")
-
-                  if username then
-                    request_handle:streamInfo():dynamicMetadata():set("envoy.filters.http.custom_maas", "user_id", username)
-                    request_handle:headers():remove("X-MaaS-Username")
-                  end
-                  if group then
-                    request_handle:streamInfo():dynamicMetadata():set("envoy.filters.http.custom_maas", "groups", group)
-                    request_handle:headers():remove("X-MaaS-Group")
-                  end
-                  if key_id then
-                    request_handle:streamInfo():dynamicMetadata():set("envoy.filters.http.custom_maas", "key_id", key_id)
-                    request_handle:headers():remove("X-MaaS-Key-Id")
-                  end
+                  -- Strip tracking variables completely before moving upstream to backend LLMs
+                  request_handle:headers():remove("X-MaaS-Username")
+                  request_handle:headers():remove("X-MaaS-Group")
+                  request_handle:headers():remove("X-MaaS-Key-Id")
                 end
               end
 
               function envoy_on_response(response_handle)
-                -- FIX: Check the metadata flag instead of reading request pseudo-headers
                 local meta = response_handle:streamInfo():dynamicMetadata():get("envoy.filters.http.custom_maas")
                 if meta and meta["is_completions"] == "true" then
-
-                  -- Parse JSON response body for token counts
                   local body = response_handle:body()
                   if body then
                     local body_str = body:getBytes(0, body:length())
-                    -- Simple JSON parsing for usage fields and model
                     local total_tokens = string.match(body_str, '"total_tokens"%s*:%s*(%d+)')
                     local prompt_tokens = string.match(body_str, '"prompt_tokens"%s*:%s*(%d+)')
                     local completion_tokens = string.match(body_str, '"completion_tokens"%s*:%s*(%d+)')
-                    local model = string.match(body_str, '"model"%s*:%s*"([^"]+)"')
 
                     response_handle:streamInfo():dynamicMetadata():set("envoy.filters.http.json_to_metadata", "tokens_total", total_tokens or "0")
                     response_handle:streamInfo():dynamicMetadata():set("envoy.filters.http.json_to_metadata", "tokens_prompt", prompt_tokens or "0")
                     response_handle:streamInfo():dynamicMetadata():set("envoy.filters.http.json_to_metadata", "tokens_completion", completion_tokens or "0")
-                    response_handle:streamInfo():dynamicMetadata():set("envoy.filters.http.json_to_metadata", "model", model or "")
                   end
                 end
               end
 
-  # OpenTelemetry Access Logger filtered to /v1/completions
+  # OpenTelemetry Access Logger Configuration
   - applyTo: NETWORK_FILTER
     match:
       context: GATEWAY
@@ -119,7 +130,7 @@ spec:
                 name: envoy.access_loggers.extension_filters.cel
                 typed_config:
                   '@type': type.googleapis.com/envoy.extensions.access_loggers.filters.cel.v3.ExpressionFilter
-                  expression: "request.path.endsWith('/v1/completions')"
+                  expression: "request.path.endsWith('/v1/chat/completions')"
             typed_config:
               '@type': type.googleapis.com/envoy.extensions.access_loggers.open_telemetry.v3.OpenTelemetryAccessLogConfig
               common_config:
@@ -171,18 +182,22 @@ spec:
                 - key: route_name
                   value:
                     string_value: '%ROUTE_NAME%'
-                - key: user_id
-                  value:
-                    string_value: '%DYNAMIC_METADATA(envoy.filters.http.custom_maas:user_id)%'
                 - key: subscription
                   value:
                     string_value: '%REQ(X-MaaS-Subscription)%'
+                
+                # NATIVE DIRECT EXT_AUTHZ LOOKUPS (No Lua filters needed here anymore!)
+                - key: user_id
+                  value:
+                    string_value: '%DYNAMIC_METADATA(envoy.filters.http.ext_authz:identity.userid)%'
                 - key: groups
                   value:
-                    string_value: '%DYNAMIC_METADATA(envoy.filters.http.custom_maas:groups)%'
+                    string_value: '%DYNAMIC_METADATA(envoy.filters.http.ext_authz:identity.groups_str)%'
                 - key: key_id
                   value:
-                    string_value: '%DYNAMIC_METADATA(envoy.filters.http.custom_maas:key_id)%'
+                    string_value: '%DYNAMIC_METADATA(envoy.filters.http.ext_authz:identity.keyId)%'
+                
+                # Output Token Metrics Processing
                 - key: tokens_total
                   value:
                     string_value: '%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:tokens_total)%'
