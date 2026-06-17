@@ -832,6 +832,14 @@ allow {
 		"response": map[string]any{
 			"success": map[string]any{
 				"headers": map[string]any{
+					// Key ID for tracking (only for API keys)
+					"X-MaaS-Key-Id": map[string]any{
+						"plain": map[string]any{
+							"expression": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.keyId : ""`,
+						},
+						"metrics":  false,
+						"priority": int64(0),
+					},
 					"X-MaaS-Username": map[string]any{
 						"when": []any{
 							map[string]any{
