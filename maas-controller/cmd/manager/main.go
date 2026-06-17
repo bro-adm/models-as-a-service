@@ -712,7 +712,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := mgr.Add(ensureClusterBootstrapRunnable(mgr, maasSubscriptionNamespace, controllerNamespace, "maas-controller", gatewayName, gatewayNamespace)); err != nil {
 	// ConfigReconciler manages cluster-wide resources (EnvoyFilter for usage tracking)
 	if err := (&maas.ConfigReconciler{
 		Client: mgr.GetClient(),
